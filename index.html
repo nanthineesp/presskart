@@ -45,6 +45,10 @@
     .green{background:#10b981}.red{background:#ef4444}.gray{background:#9ca3af}
     .status{padding:2px 8px;border-radius:999px;background:#eef2ff;color:#3730a3;font-size:12px}
     .money{font-variant-numeric:tabular-nums}
+    /* Tabs */
+    .tabs{display:flex;gap:8px;border-bottom:1px solid var(--border);margin-bottom:10px}
+    .tab{padding:8px 12px;border:1px solid var(--border);border-bottom:none;border-radius:10px 10px 0 0;background:#fff;cursor:pointer}
+    .tab.active{background:#111827;color:#fff;border-color:#111827}
   </style>
 </head>
 <body>
@@ -57,10 +61,58 @@
           <div class="small">Pickup • Press • Deliver</div>
         </div>
       </div>
-      <div id="walletPill" class="pill">Wallet: RM 0.00</div>
+      <div class="flex" style="gap:10px;align-items:center">
+        <div id="sessionUser" class="pill" style="display:none"></div>
+        <button class="btn" id="loginBtn">Login</button>
+        <button class="btn" id="logoutBtn" style="display:none">Logout</button>
+        <div id="walletPill" class="pill">Wallet: RM 0.00</div>
+      </div>
     </header>
 
-    <main class="grid layout">
+    <!-- Auth Panel -->
+    <section id="authSection" class="grid" style="gap:20px;display:none">
+      <div class="card">
+        <div class="card-h"><h3 id="authTitle">Login</h3></div>
+        <div class="card-b grid col-2" id="authBody">
+          <div style="grid-column:1/-1">
+            <label>Email</label>
+            <input id="authEmail" type="email" placeholder="you@example.com" />
+          </div>
+          <div style="grid-column:1/-1">
+            <label>Password</label>
+            <input id="authPassword" type="password" placeholder="••••••••" />
+          </div>
+          <div id="registerExtra" style="grid-column:1/-1;display:none" class="grid col-2">
+            <div>
+              <label>Full Name</label>
+              <input id="regName" placeholder="e.g., Aina Binti Ali" />
+            </div>
+            <div>
+              <label>Phone</label>
+              <input id="regPhone" placeholder="e.g., +60 12-345 6789" />
+            </div>
+            <div style="grid-column:1/-1">
+              <label>Address</label>
+              <input id="regAddress" placeholder="Street, City" />
+            </div>
+          </div>
+          <div style="grid-column:1/-1" class="flex between">
+            <div class="small">New here? <a href="#" id="goRegister">Create an account</a></div>
+            <div class="small" style="display:none" id="goLoginWrap">Already have an account? <a href="#" id="goLogin">Login</a></div>
+          </div>
+          <div style="grid-column:1/-1" class="flex" id="authActions">
+            <button class="btn primary" id="doLogin">Login</button>
+            <button class="btn" id="cancelAuth">Cancel</button>
+          </div>
+          <div style="grid-column:1/-1" class="flex" id="regActions" style="display:none">
+            <button class="btn primary" id="doRegister">Register</button>
+            <button class="btn" id="cancelReg">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <main id="appMain" class="grid layout">
       <section class="grid" style="gap:20px">
         <div class="card">
           <div class="card-h">
@@ -132,7 +184,13 @@
         </div>
 
         <div class="card">
-          <div class="card-h"><h3>Your Orders</h3></div>
+          <div class="card-h between">
+            <h3>Your Orders</h3>
+            <div class="flex" style="gap:6px">
+              <button class="btn" id="tabActive">Active</button>
+              <button class="btn" id="tabHistory">History</button>
+            </div>
+          </div>
           <div class="card-b">
             <ul id="orders" class="list"></ul>
           </div>
@@ -164,10 +222,11 @@
           <div class="card-h"><h3>How it works</h3></div>
           <div class="card-b small">
             <ol style="margin:0 0 0 18px;display:grid;gap:8px">
+              <li>Register or login to your account.</li>
               <li>Save your profile.</li>
               <li>Add items (Wash / Iron), choose delivery.</li>
               <li>Pay (Wallet / Online / Card). Wallet deducts immediately.</li>
-              <li>Track status with per‑stage EAT.</li>
+              <li>Track status with per‑stage EAT. Delivered/Cancelled move to History.</li>
             </ol>
           </div>
         </div>
@@ -187,13 +246,19 @@
   const WORKFLOW = {scheduled_to_picked:30, picked_to_cleaning:15, cleaning_to_ready:60};
 
   // ---------- Storage helpers ----------
-  const LS = {USER:'pk_user', WALLET:'pk_wallet', ORDERS:'pk_orders'};
+  const LS = {USERS:'pk_users', SESSION:'pk_session_uid', WALLET_PREFIX:'pk_wallet_', ORDERS:'pk_orders'}; // orders stored globally but filtered by userId
   const load = (k, fb) => {try{const v = localStorage.getItem(k); return v? JSON.parse(v): fb;}catch{return fb}};
   const save = (k,v) => localStorage.setItem(k, JSON.stringify(v));
 
-  // ---------- State ----------
-  let user = load(LS.USER, null);
-  let wallet = {balance: Number(load(LS.WALLET, 0)) || 0};
+  // ---------- Auth state ----------
+  let users = load(LS.USERS, []); // [{id,email,pass,name,phone,address}]
+  let currentUserId = localStorage.getItem(LS.SESSION) || null;
+
+  // ---------- Wallet per user ----------
+  const walletKey = () => currentUserId? (LS.WALLET_PREFIX+currentUserId) : (LS.WALLET_PREFIX+'guest');
+  let wallet = {balance: Number(load(walletKey(), 0)) || 0};
+
+  // ---------- Orders (global array, filter by userId) ----------
   let orders = load(LS.ORDERS, []);
 
   // ---------- Utils ----------
@@ -209,9 +274,7 @@
     const lastLeg = (DELIVERY[deliveryKey]||DELIVERY.Saver).minutes*60000;
     return {Picked:new Date(picked).toISOString(), Cleaning:new Date(cleaning).toISOString(), Ready:new Date(ready).toISOString(), Delivered:new Date(ready+lastLeg).toISOString()};
   }
-  function calcItems(items){
-    let total=0; items.forEach(it=>{const p=PRICE_TABLE[it.type]; const per=(it.wash?p.wash:0)+(it.iron?p.iron:0); total += per*(it.count||0)}); return total;
-  }
+  function calcItems(items){ let total=0; items.forEach(it=>{const p=PRICE_TABLE[it.type]; const per=(it.wash?p.wash:0)+(it.iron?p.iron:0); total += per*(it.count||0)}); return total; }
 
   // ---------- DOM refs ----------
   const yearEl = document.getElementById('year'); yearEl.textContent = new Date().getFullYear();
@@ -236,30 +299,104 @@
   const placeBtn = document.getElementById('placeOrder');
   const resetFormBtn = document.getElementById('resetForm');
   const ordersEl = document.getElementById('orders');
+  const tabActiveBtn = document.getElementById('tabActive');
+  const tabHistoryBtn = document.getElementById('tabHistory');
 
-  // ---------- Init profile ----------
-  function renderWallet(){ walletPill.textContent = `Wallet: ${fmt(wallet.balance)}`; walletBal.textContent = fmt(wallet.balance); save(LS.WALLET, wallet.balance); }
-  function renderProfile(){ if(user){ nameEl.value=user.name; phoneEl.value=user.phone; addressEl.value=user.address; } }
+  // Auth UI
+  const loginBtn = document.getElementById('loginBtn');
+  const logoutBtn = document.getElementById('logoutBtn');
+  const sessionUser = document.getElementById('sessionUser');
+  const authSection = document.getElementById('authSection');
+  const appMain = document.getElementById('appMain');
+  const authTitle = document.getElementById('authTitle');
+  const authEmail = document.getElementById('authEmail');
+  const authPassword = document.getElementById('authPassword');
+  const goRegister = document.getElementById('goRegister');
+  const goLogin = document.getElementById('goLogin');
+  const goLoginWrap = document.getElementById('goLoginWrap');
+  const registerExtra = document.getElementById('registerExtra');
+  const doLogin = document.getElementById('doLogin');
+  const cancelAuth = document.getElementById('cancelAuth');
+  const doRegister = document.getElementById('doRegister');
+  const cancelReg = document.getElementById('cancelReg');
+  const regName = document.getElementById('regName');
+  const regPhone = document.getElementById('regPhone');
+  const regAddress = document.getElementById('regAddress');
+
+  function setAuthMode(mode){
+    if(mode==='login'){
+      authTitle.textContent='Login'; registerExtra.style.display='none'; doLogin.style.display='inline-block'; cancelAuth.style.display='inline-block'; doRegister.style.display='none'; goLoginWrap.style.display='none';
+    } else {
+      authTitle.textContent='Register'; registerExtra.style.display='grid'; doLogin.style.display='none'; cancelAuth.style.display='none'; doRegister.style.display='inline-block'; goLoginWrap.style.display='block';
+    }
+  }
+
+  function showAuth(show){ authSection.style.display = show? 'block':'none'; appMain.style.display = show? 'none':'grid'; }
+
+  function currentUser(){ return users.find(u=>u.id===currentUserId)||null; }
+
+  function refreshSessionUI(){
+    const u = currentUser();
+    if(u){
+      sessionUser.style.display='inline-block'; sessionUser.textContent = `👤 ${u.name||u.email}`; loginBtn.style.display='none'; logoutBtn.style.display='inline-block';
+      // load profile fields
+      nameEl.value = u.name||''; phoneEl.value=u.phone||''; addressEl.value=u.address||'';
+    } else {
+      sessionUser.style.display='none'; loginBtn.style.display='inline-block'; logoutBtn.style.display='none';
+      nameEl.value = phoneEl.value = addressEl.value = '';
+    }
+    // wallet for this user
+    wallet = {balance: Number(load(walletKey(), 0)) || 0};
+    renderWallet();
+    // render orders filtered by user
+    renderOrders();
+  }
+
+  loginBtn.onclick = ()=>{ setAuthMode('login'); showAuth(true); };
+  logoutBtn.onclick = ()=>{ currentUserId=null; localStorage.removeItem(LS.SESSION); refreshSessionUI(); alert('Logged out'); };
+  cancelAuth.onclick = ()=>{ showAuth(false); };
+  cancelReg.onclick = ()=>{ setAuthMode('login'); };
+  goRegister.onclick = (e)=>{ e.preventDefault(); setAuthMode('register'); goRegister.parentElement.style.display='none'; };
+  goLogin.onclick = (e)=>{ e.preventDefault(); setAuthMode('login'); goRegister.parentElement.style.display='block'; };
+
+  doLogin.onclick = ()=>{
+    const email = authEmail.value.trim().toLowerCase(); const pass = authPassword.value;
+    const u = users.find(x=>x.email===email && x.pass===pass);
+    if(!u){ alert('Invalid email or password'); return; }
+    currentUserId = u.id; localStorage.setItem(LS.SESSION, currentUserId); showAuth(false); refreshSessionUI();
+  };
+
+  doRegister.onclick = ()=>{
+    const email = authEmail.value.trim().toLowerCase(); const pass = authPassword.value;
+    if(!email || !/^[^@]+@[^@]+\.[^@]+$/.test(email)) return alert('Enter a valid email');
+    if(!pass || pass.length<6) return alert('Password must be at least 6 characters');
+    if(users.some(u=>u.email===email)) return alert('Email already registered');
+    const name = regName.value.trim(); const phone = regPhone.value.trim(); const address = regAddress.value.trim();
+    const u = {id:uid(), email, pass, name, phone, address}; users=[...users,u]; save(LS.USERS, users);
+    currentUserId = u.id; localStorage.setItem(LS.SESSION, currentUserId);
+    showAuth(false); refreshSessionUI(); alert('Account created!');
+  };
+
+  // ---------- Profile & Wallet ----------
+  function renderWallet(){ walletPill.textContent = `Wallet: ${fmt(wallet.balance)}`; walletBal.textContent = fmt(wallet.balance); save(walletKey(), wallet.balance); }
+  function renderProfile(){ const u=currentUser(); if(u){ nameEl.value=u.name||''; phoneEl.value=u.phone||''; addressEl.value=u.address||''; } }
   renderProfile(); renderWallet();
 
   saveProfileBtn.onclick = () => {
+    const u=currentUser(); if(!u){ alert('Please login first.'); return; }
     const name = nameEl.value.trim(), phone = phoneEl.value.trim(), address = addressEl.value.trim();
     if(!name||!phone||!address){ alert('Please fill all fields.'); return; }
-    user = { id: user?.id || uid(), name, phone, address };
-    save(LS.USER, user); alert('Profile saved');
-    if(orders.length===0){ // seed demo order
+    Object.assign(u,{name,phone,address}); users = users.map(x=> x.id===u.id? u:x); save(LS.USERS, users); alert('Profile saved');
+    // seed a demo order once per user
+    if(!orders.some(o=>o.userId===u.id)){
       const created = nowIso();
-      const demo = { id: uid(), userId:user.id, lineItems:[{id:uid(),type:'Shirt',count:3,wash:true,iron:false}], notes:'Ring bell', slot: new Date().toISOString().slice(0,10)+" 12:00–14:00", status:'Scheduled', createdAt:created, updatedAt:created, summary:'3 Shirts (wash)', itemsTotal:9, deliveryType:'Saver', deliveryCost:4, estimateMYR:13, logs:[{status:'Scheduled',at:created}], paymentMethod:'Wallet', paymentStatus:'Paid (Wallet)', eat: buildEat(created,'Saver') };
-      orders=[demo]; save(LS.ORDERS, orders); renderOrders();
+      const demo = { id: uid(), userId:u.id, lineItems:[{id:uid(),type:'Shirt',count:3,wash:true,iron:false}], notes:'Ring bell', slot: new Date().toISOString().slice(0,10)+" 12:00–14:00", status:'Scheduled', createdAt:created, updatedAt:created, summary:'3 Shirts (wash)', itemsTotal:9, deliveryType:'Saver', deliveryCost:4, estimateMYR:13, logs:[{status:'Scheduled',at:created}], paymentMethod:'Wallet', paymentStatus:'Paid (Wallet)', eat: buildEat(created,'Saver') };
+      orders=[demo, ...orders]; save(LS.ORDERS, orders); renderOrders();
     }
   };
 
   // ---------- Slots & Delivery ----------
-  (function buildSlots(){
-    const out=[]; const base=new Date();
-    for(let d=0; d<3; d++){ const day=new Date(base); day.setDate(base.getDate()+d); const ds=day.toISOString().slice(0,10); ["10:00–12:00","12:00–14:00","16:00–18:00"].forEach(r=>out.push(`${ds} ${r}`)); }
-    out.forEach(s=>{ const o=document.createElement('option'); o.textContent=s; slotSel.appendChild(o); });
-  })();
+  (function buildSlots(){ const out=[]; const base=new Date(); for(let d=0; d<3; d++){ const day=new Date(base); day.setDate(base.getDate()+d); const ds=day.toISOString().slice(0,10); ["10:00–12:00","12:00–14:00","16:00–18:00"].forEach(r=>out.push(`${ds} ${r}`)); } out.forEach(s=>{ const o=document.createElement('option'); o.textContent=s; slotSel.appendChild(o); }); })();
   (function buildDelivery(){ Object.keys(DELIVERY).forEach(k=>{ const opt=document.createElement('option'); const v=DELIVERY[k]; opt.value=k; opt.textContent=`${v.label} — ${fmt(v.cost)} / ~${(v.minutes/60).toFixed(2)}h`; deliverySel.appendChild(opt); }); })();
 
   // ---------- Items UI ----------
@@ -284,13 +421,7 @@
   }
 
   function getCurrentItems(){
-    return Array.from(itemsEl.children).map(row=>({
-      id: row.dataset.id,
-      type: row.querySelector('[data-k=type]').value,
-      count: Number(row.querySelector('[data-k=count]').value||0),
-      wash: row.querySelector('[data-k=wash]').checked,
-      iron: row.querySelector('[data-k=iron]').checked,
-    }));
+    return Array.from(itemsEl.children).map(row=>({ id: row.dataset.id, type: row.querySelector('[data-k=type]').value, count: Number(row.querySelector('[data-k=count]').value||0), wash: row.querySelector('[data-k=wash]').checked, iron: row.querySelector('[data-k=iron]').checked }));
   }
 
   function recalcTotals(){
@@ -303,9 +434,7 @@
     grandTotalEl.textContent = fmt(itemsTotal + del.cost);
   }
 
-  addRowBtn.onclick = ()=>{
-    itemsEl.appendChild(itemRowTemplate(uid(), {type:'Shirt',count:1,wash:true,iron:false}));
-  };
+  addRowBtn.onclick = ()=>{ itemsEl.appendChild(itemRowTemplate(uid(), {type:'Shirt',count:1,wash:true,iron:false})); };
   // start with one row
   addRowBtn.click();
 
@@ -314,20 +443,21 @@
   document.querySelectorAll('[data-topup]').forEach(b=> b.onclick = ()=>{ wallet.balance=+(wallet.balance + Number(b.dataset.topup)).toFixed(2); renderWallet(); });
   resetWalletBtn.onclick = ()=>{ wallet.balance=0; renderWallet(); };
 
-  // ---------- Orders render ----------
+  // ---------- Orders ----------
   function itemsSummary(items){
-    return items.filter(i=>i.count>0&&(i.wash||i.iron)).map(i=>{
-      const tail=[i.wash?'wash':null,i.iron?'iron':null].filter(Boolean).join(', ');
-      return `${i.count} ${i.type}${i.count>1?'s':''}${tail?` (${tail})`:''}`;
-    }).join(', ');
+    return items.filter(i=>i.count>0&&(i.wash||i.iron)).map(i=>{ const tail=[i.wash?'wash':null,i.iron?'iron':null].filter(Boolean).join(', '); return `${i.count} ${i.type}${i.count>1?'s':''}${tail?` (${tail})`:''}`; }).join(', ');
   }
 
-  function renderOrders(){
+  function isHistoryOrder(o){ return o.isCanceled || o.status==='Delivered'; }
+
+  function renderOrders(view='active'){
     ordersEl.innerHTML = '';
-    if(!orders.length){ ordersEl.innerHTML = '<li class="small" style="color:var(--muted)">No orders yet.</li>'; return; }
-    orders.forEach((o,idx)=>{
-      const li=document.createElement('li');
-      li.className='card';
+    const u = currentUser();
+    const myOrders = orders.filter(o=> u? o.userId===u.id : false);
+    const list = view==='active' ? myOrders.filter(o=> !isHistoryOrder(o)) : myOrders.filter(isHistoryOrder);
+    if(!list.length){ ordersEl.innerHTML = `<li class="small" style="color:var(--muted)">${view==='active'?'No active orders.':'No history yet.'}</li>`; return; }
+    list.forEach((o,idx)=>{
+      const li=document.createElement('li'); li.className='card';
       li.innerHTML = `
         <div class="card-b">
           <div class="flex between">
@@ -342,20 +472,21 @@
             <div class="small">Total: <b>${fmt(o.estimateMYR)}</b></div>
           </div>
           <div class="flex" style="margin-top:8px;flex-wrap:wrap">
-            ${!o.isCanceled? `<button class="btn" data-prev="${o.id}">Back</button>
+            ${(!o.isCanceled && o.status!=='Delivered' && view==='active')? `<button class="btn" data-prev="${o.id}">Back</button>
                               <button class="btn" data-next="${o.id}">Next</button>
                               ${o.status==='Scheduled'?`<button class="btn danger" data-cancel="${o.id}">Cancel</button>`:''}`:''}
-            <button class="btn ghost" data-tl="${idx}">Timeline</button>
+            <button class="btn ghost" data-tl="${o.id}">Timeline</button>
           </div>
-          <div class="border" id="tl_${idx}" style="display:none"></div>
+          <div class="border" id="tl_${o.id}" style="display:none"></div>
         </div>`;
       ordersEl.appendChild(li);
     });
 
     ordersEl.querySelectorAll('[data-tl]').forEach(b=> b.onclick = ()=>{
-      const idx = Number(b.getAttribute('data-tl'));
-      const o = orders[idx];
-      const box = document.getElementById('tl_'+idx);
+      const id = b.getAttribute('data-tl');
+      const o = orders.find(x=>x.id===id);
+      const box = document.getElementById('tl_'+id);
+      if(!o||!box) return;
       if(box.style.display==='none'){ box.style.display='block'; box.innerHTML = renderTimeline(o); }
       else box.style.display='none';
     });
@@ -364,6 +495,9 @@
     ordersEl.querySelectorAll('[data-next]').forEach(b=> b.onclick = ()=> moveStatus(b.getAttribute('data-next'), +1));
     ordersEl.querySelectorAll('[data-cancel]').forEach(b=> b.onclick = ()=> cancelOrder(b.getAttribute('data-cancel')));
   }
+
+  tabActiveBtn.onclick = ()=>{ tabActiveBtn.classList.add('primary'); tabHistoryBtn.classList.remove('primary'); renderOrders('active'); };
+  tabHistoryBtn.onclick = ()=>{ tabHistoryBtn.classList.add('primary'); tabActiveBtn.classList.remove('primary'); renderOrders('history'); };
 
   function renderTimeline(o){
     const now = Date.now();
@@ -391,10 +525,11 @@
     const idx = orders.findIndex(o=>o.id===id); if(idx<0) return;
     const o = orders[idx]; const i = STATUSES.indexOf(o.status); const j = i+delta; if(j<0||j>=STATUSES.length) return;
     const next = STATUSES[j]; o.status = next; const t = nowIso(); o.updatedAt=t; (o.logs||(o.logs=[])).push({status:next, at:t});
-    save(LS.ORDERS, orders); renderOrders();
+    save(LS.ORDERS, orders); // rerender according to current tab
+    if(tabHistoryBtn.classList.contains('primary')) renderOrders('history'); else renderOrders('active');
   }
   function cancelOrder(id){
-    const o = orders.find(x=>x.id===id); if(!o) return; if(!confirm('Cancel this order?')) return; o.isCanceled=true; o.updatedAt=nowIso(); (o.logs||(o.logs=[])).push({status:'Canceled', at:o.updatedAt}); save(LS.ORDERS, orders); renderOrders();
+    const o = orders.find(x=>x.id===id); if(!o) return; if(!confirm('Cancel this order?')) return; o.isCanceled=true; o.updatedAt=nowIso(); (o.logs||(o.logs=[])).push({status:'Canceled', at:o.updatedAt}); save(LS.ORDERS, orders); if(tabHistoryBtn.classList.contains('primary')) renderOrders('history'); else renderOrders('active');
   }
 
   // ---------- Pricing + Place order ----------
@@ -403,7 +538,7 @@
   deliverySel.addEventListener('change', recalcTotals);
 
   placeBtn.onclick = ()=>{
-    if(!user){ alert('Save your profile first.'); return; }
+    const u=currentUser(); if(!u){ alert('Please login first.'); return; }
     const items = getCurrentItems().filter(i=> i.count>0 && (i.wash||i.iron));
     if(items.length===0){ alert('Add at least one item.'); return; }
     const totals = { itemsTotal: calcItems(items), deliveryCost: (DELIVERY[deliverySel.value]||DELIVERY.Saver).cost };
@@ -414,14 +549,17 @@
       wallet.balance = +(wallet.balance - grand).toFixed(2); renderWallet();
     }
     const created = nowIso();
-    const order = { id:uid(), userId:user.id, lineItems:items, notes: notesEl.value.trim()||undefined, slot: slotSel.value, status:'Scheduled', createdAt:created, updatedAt:created, summary: itemsSummary(items), estimateMYR: +grand.toFixed(2), logs:[{status:'Scheduled', at:created, note:`${deliverySel.value} selected`}], deliveryType: deliverySel.value, deliveryCost: totals.deliveryCost, itemsTotal: totals.itemsTotal, paymentMethod: pm, paymentStatus: pm==='Wallet'? 'Paid (Wallet)': pm==='Online'? 'Paid (Online)':'Paid (Card)', eat: buildEat(created, deliverySel.value) };
-    orders = [order, ...orders]; save(LS.ORDERS, orders); renderOrders(); alert('Order placed!');
+    const order = { id:uid(), userId:u.id, lineItems:items, notes: notesEl.value.trim()||undefined, slot: slotSel.value, status:'Scheduled', createdAt:created, updatedAt:created, summary: itemsSummary(items), estimateMYR: +grand.toFixed(2), logs:[{status:'Scheduled', at:created, note:`${deliverySel.value} selected`}], deliveryType: deliverySel.value, deliveryCost: totals.deliveryCost, itemsTotal: totals.itemsTotal, paymentMethod: pm, paymentStatus: pm==='Wallet'? 'Paid (Wallet)': pm==='Online'? 'Paid (Online)':'Paid (Card)', eat: buildEat(created, deliverySel.value) };
+    orders = [order, ...orders]; save(LS.ORDERS, orders); alert('Order placed!');
+    // After placing, switch to Active and re-render
+    tabActiveBtn.classList.add('primary'); tabHistoryBtn.classList.remove('primary'); renderOrders('active');
   };
 
   resetFormBtn.onclick = ()=>{ itemsEl.innerHTML=''; addRowBtn.click(); notesEl.value=''; deliverySel.value='Saver'; recalcTotals(); };
 
   // ---------- First paint ----------
-  recalcTotals(); renderOrders();
+  function firstPaint(){ tabActiveBtn.classList.add('primary'); renderOrders('active'); refreshSessionUI(); }
+  firstPaint();
 })();
 </script>
 </body>
